@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Secrets and local settings
+.env
+*.env
+*.local.yaml
+*.local.yml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated market data and reports
+data/raw/**
+data/interim/**
+data/processed/**
+data/manifests/**
+data/.collector.lock
+data/yahoo_hourly.json
+data/yahoo_hourly.tmp
+reports/backtests/**
+reports/figures/**
+
+# Keep directory markers
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/manifests/.gitkeep
+!reports/backtests/.gitkeep
+!reports/figures/.gitkeep
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/

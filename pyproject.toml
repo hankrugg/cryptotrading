@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-trader-school"
+version = "0.1.0"
+description = "Crypto strategy research and manual TradingView paper-trading infrastructure"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["yfinance>=0.2.54,<2", "python-dotenv>=1,<2"]
+
+[project.scripts]
+crypto-trader = "crypto_trader.main:main"
+crypto-data = "crypto_trader.data:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
