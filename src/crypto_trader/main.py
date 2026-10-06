@@ -61,7 +61,7 @@ def main():
             run_trading_signal()
         except Exception as e:
             print(f"Error occurred: {e}")
-        time.sleep(3600)  # Sleep for 1 hour
+        time.sleep(36)  # Sleep for 36 seconds
 
 
 if __name__ == "__main__":
