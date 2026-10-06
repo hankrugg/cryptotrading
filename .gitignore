@@ -29,6 +29,7 @@ data/yahoo_hourly.json
 data/yahoo_hourly.tmp
 reports/backtests/**
 reports/figures/**
+logs/**
 
 # Keep directory markers
 !data/raw/.gitkeep
