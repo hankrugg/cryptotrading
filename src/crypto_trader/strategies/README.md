@@ -1,12 +1,18 @@
 # Strategies
 
-Each strategy gets its own directory and will eventually contain:
+Each small strategy lives in a named Python module. Strategies calculate
+target weights; scheduling, notifications, and logging live outside them.
 
-- a short design document;
-- one Python implementation shared by notebooks, historical backtests, and scheduled signal generation;
-- default parameters;
-- strategy-specific tests.
+```python
+from crypto_trader.strategies.sma_distance import sma_distance
 
-Strategies produce proposed position changes. They do not send email, update the paper portfolio, or bypass the shared risk engine.
+weights = sma_distance(prices, window=20, scale=10)
+```
 
-The backtest and scheduled runner must provide a strategy with completed bars in the same schema and use the same configuration. This prevents a separate "live" strategy from drifting away from the version that was tested.
+Supply a chronological pandas DataFrame with a `Close` column. The result
+is an aligned Series between -1 (short) and +1 (long), with NaN during warm-up.
+This strategy measures distance from one moving average; it is not a
+two-average crossover strategy.
+
+Other experiments currently live in the notebooks. Shared configuration and
+multi-strategy scheduling have not yet been implemented.
