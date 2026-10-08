@@ -59,11 +59,13 @@ created with `create_trades_table()` in the same `trading.db` database used for
 market candles.
 
 The hourly runner now uses `PaperTradeExecutor` to record simulated fills at
-the latest strategy candle close. A positive target opens or keeps a long
-position, a negative target opens or keeps a short position, and a zero target
-closes an open position. Repeating a signal in the same direction does not
-create duplicate trades. This is local paper execution for the trade log; it
-does not submit an order to TradingView or an exchange.
+the latest strategy candle close. It uses the SMA-distance signal as a target
+portfolio weight from -1 (fully short) to +1 (fully long), matching the
+backtest. Position quantity is calculated as `abs(weight) * equity / price`;
+when the weight changes, the paper position is rebalanced. This is local paper
+execution for the trade log; it does not submit an order to TradingView or an
+exchange. Set `PAPER_INITIAL_EQUITY_USD` in `.env` to the same starting balance
+used by `crypto-risk`.
 
 ## Minute risk monitoring
 

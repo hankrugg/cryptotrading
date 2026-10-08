@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+import math
 import logging
+import os
 from pathlib import Path
 import sqlite3
 import uuid
@@ -35,11 +37,21 @@ class PaperTradeExecutor:
     It records simulated fills at the strategy's latest candle close.
     """
 
-    def __init__(self, connection: sqlite3.Connection, *, quantity: float = 1.0):
-        if quantity <= 0:
-            raise ValueError("quantity must be positive")
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        initial_equity_usd: float = 100_000.0,
+        quantity: float | None = None,
+    ):
+        if initial_equity_usd <= 0:
+            raise ValueError("initial_equity_usd must be positive")
+        if quantity is not None and quantity <= 0:
+            raise ValueError("quantity must be positive when provided")
         self.connection = connection
-        self.quantity = quantity
+        self.initial_equity_usd = initial_equity_usd
+        self.fixed_quantity = quantity
+        self._weight_synchronized: set[str] = set()
         create_trades_table(connection)
         connection.commit()
 
@@ -48,13 +60,22 @@ class PaperTradeExecutor:
         cls,
         path: Path = DEFAULT_DATABASE_PATH,
         *,
-        quantity: float = 1.0,
+        initial_equity_usd: float | None = None,
+        quantity: float | None = None,
     ) -> "PaperTradeExecutor":
         path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path, timeout=10.0)
         connection.execute("PRAGMA busy_timeout = 5000")
         connection.execute("PRAGMA journal_mode = WAL")
-        return cls(connection, quantity=quantity)
+        if initial_equity_usd is None:
+            initial_equity_usd = float(
+                os.getenv("PAPER_INITIAL_EQUITY_USD", "100000")
+            )
+        return cls(
+            connection,
+            initial_equity_usd=initial_equity_usd,
+            quantity=quantity,
+        )
 
     def close(self) -> None:
         self.connection.close()
@@ -83,7 +104,34 @@ class PaperTradeExecutor:
             raise ValueError("symbol cannot be empty")
         target_side = "long" if signal > 0 else "short" if signal < 0 else None
         current = self._current_position(normalized_symbol)
+        target_quantity = (
+            0.0
+            if target_side is None
+            else self._target_quantity(current, signal=signal, price=price)
+        )
+        same_target = False
         if current is not None and current.side == target_side:
+            try:
+                same_target = math.isclose(
+                    float(current.trade.signal),
+                    signal,
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                )
+            except ValueError:
+                same_target = False
+        needs_initial_sync = (
+            same_target
+            and normalized_symbol not in self._weight_synchronized
+            and not math.isclose(
+                current.trade.size_qty if current is not None else 0.0,
+                target_quantity,
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            )
+        )
+        if same_target and not needs_initial_sync:
+            self._weight_synchronized.add(normalized_symbol)
             return []
 
         created: list[Trade] = []
@@ -103,11 +151,13 @@ class PaperTradeExecutor:
                 side=target_side,
                 signal=signal,
                 price=price,
+                quantity=target_quantity,
                 executed_at=executed_at,
             )
             with self.connection:
                 upsert_trade(self.connection, entry)
             created.append(entry)
+        self._weight_synchronized.add(normalized_symbol)
         return created
 
     def _current_position(self, symbol: str) -> OpenPosition | None:
@@ -163,6 +213,21 @@ class PaperTradeExecutor:
         ).fetchone()
         return float(row[0])
 
+    def _target_quantity(
+        self,
+        current: OpenPosition | None,
+        *,
+        signal: float,
+        price: float,
+    ) -> float:
+        if self.fixed_quantity is not None:
+            return self.fixed_quantity
+        equity = self.initial_equity_usd + self._cumulative_pnl()
+        if current is not None:
+            direction = 1 if current.side == "long" else -1
+            equity += direction * (price - current.trade.price) * current.trade.size_qty
+        return abs(signal) * equity / price
+
     def _create_entry(
         self,
         *,
@@ -170,10 +235,10 @@ class PaperTradeExecutor:
         side: str,
         signal: float,
         price: float,
+        quantity: float,
         executed_at: datetime,
     ) -> Trade:
         trade_number = self._next_trade_number()
-        quantity = self.quantity
         cumulative = self._cumulative_pnl()
         return Trade(
             symbol=symbol,

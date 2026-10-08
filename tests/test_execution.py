@@ -10,7 +10,10 @@ from crypto_trader.execution import PaperTradeExecutor
 class PaperTradeExecutorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = sqlite3.connect(":memory:")
-        self.executor = PaperTradeExecutor(self.connection)
+        self.executor = PaperTradeExecutor(
+            self.connection,
+            initial_equity_usd=100.0,
+        )
         self.time = datetime(2026, 9, 9, 13, 39, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
@@ -25,7 +28,7 @@ class PaperTradeExecutorTests(unittest.TestCase):
         )
         repeated = self.executor.apply_signal(
             symbol="COINBASE:SOLUSD",
-            signal=0.5,
+            signal=1.0,
             price=105.0,
             executed_at=self.time,
         )
@@ -60,6 +63,27 @@ class PaperTradeExecutorTests(unittest.TestCase):
         self.assertEqual([trade.trade_type for trade in rows], ["Entry long", "Exit long", "Entry short"])
         self.assertEqual(
             self.connection.execute("SELECT count(*) FROM trades").fetchone()[0], 3
+        )
+
+    def test_signal_weight_change_rebalances_quantity(self) -> None:
+        self.executor.apply_signal(
+            symbol="COINBASE:SOLUSD",
+            signal=0.5,
+            price=100.0,
+            executed_at=self.time,
+        )
+        self.executor.apply_signal(
+            symbol="COINBASE:SOLUSD",
+            signal=1.0,
+            price=100.0,
+            executed_at=self.time,
+        )
+        quantities = self.connection.execute(
+            "SELECT trade_type, size_qty FROM trades ORDER BY id"
+        ).fetchall()
+        self.assertEqual(
+            quantities,
+            [("Entry long", 0.5), ("Exit long", 0.5), ("Entry long", 1.0)],
         )
 
 
