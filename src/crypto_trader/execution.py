@@ -1,4 +1,10 @@
-"""Local paper-trade execution for strategy target signals."""
+"""Local paper-trade execution for strategy target signals.
+
+This module is intentionally local-only. It never calls TradingView, Binance,
+or another order API. It converts a strategy target in ``[-1, 1]`` into rows in
+the SQLite ``trades`` table and calculates simulated PnL when a position is
+closed or reversed.
+"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,7 +32,11 @@ class OpenPosition:
 
 
 def _display_time(value: datetime) -> str:
-    """Format a candle timestamp like TradingView's CSV export."""
+    """Format a candle timestamp like TradingView's CSV export.
+
+    This preserves the supplied candle's clock fields. It is therefore the
+    market-bar timestamp, not a separate wall-clock time for the email.
+    """
     return value.strftime("%b %-d, %Y, %H:%M")
 
 
@@ -44,6 +54,7 @@ class PaperTradeExecutor:
         initial_equity_usd: float = 100_000.0,
         quantity: float | None = None,
     ):
+        # Reject impossible account configuration before opening a position.
         if initial_equity_usd <= 0:
             raise ValueError("initial_equity_usd must be positive")
         if quantity is not None and quantity <= 0:
@@ -51,7 +62,12 @@ class PaperTradeExecutor:
         self.connection = connection
         self.initial_equity_usd = initial_equity_usd
         self.fixed_quantity = quantity
+        # A process-local set prevents the first repeated signal after startup
+        # from being mistaken for a required rebalance once synchronization is
+        # complete. The database remains the source of truth across restarts.
         self._weight_synchronized: set[str] = set()
+        # Creating the table here means a brand-new database can be used
+        # without a separate migration command.
         create_trades_table(connection)
         connection.commit()
 
@@ -63,10 +79,14 @@ class PaperTradeExecutor:
         initial_equity_usd: float | None = None,
         quantity: float | None = None,
     ) -> "PaperTradeExecutor":
+        # Create the database directory and enable WAL so the candle/risk
+        # services can read while this process writes.
         path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path, timeout=10.0)
         connection.execute("PRAGMA busy_timeout = 5000")
         connection.execute("PRAGMA journal_mode = WAL")
+        # The environment value lets the Raspberry Pi use the same starting
+        # balance as the risk monitor without hard-coding it in the service.
         if initial_equity_usd is None:
             initial_equity_usd = float(
                 os.getenv("PAPER_INITIAL_EQUITY_USD", "100000")
@@ -78,6 +98,8 @@ class PaperTradeExecutor:
         )
 
     def close(self) -> None:
+        # Closing the connection flushes pending SQLite work and releases the
+        # file lock when the service shuts down.
         self.connection.close()
 
     def apply_signal(
@@ -94,14 +116,18 @@ class PaperTradeExecutor:
         closes an open position. Repeating a signal in the same direction does
         not create another trade.
         """
+        # A zero/negative price would make quantity and PnL calculations invalid.
         if price <= 0:
             raise ValueError("price must be positive")
         if not executed_at.tzinfo:
             logger.debug("executed_at has no timezone; preserving its value")
 
+        # Symbols are normalized before looking for an existing position, so a
+        # caller cannot accidentally create separate rows for different case.
         normalized_symbol = symbol.strip().upper()
         if not normalized_symbol:
             raise ValueError("symbol cannot be empty")
+        # The sign chooses direction; the magnitude chooses target exposure.
         target_side = "long" if signal > 0 else "short" if signal < 0 else None
         current = self._current_position(normalized_symbol)
         target_quantity = (
@@ -109,6 +135,7 @@ class PaperTradeExecutor:
             if target_side is None
             else self._target_quantity(current, signal=signal, price=price)
         )
+        # Repeating exactly the same signal should not create a new trade.
         same_target = False
         if current is not None and current.side == target_side:
             try:
@@ -120,6 +147,8 @@ class PaperTradeExecutor:
                 )
             except ValueError:
                 same_target = False
+        # After a process restart, an existing position may have a different
+        # quantity from the current equity/weight calculation. Sync it once.
         needs_initial_sync = (
             same_target
             and normalized_symbol not in self._weight_synchronized
@@ -136,6 +165,8 @@ class PaperTradeExecutor:
 
         created: list[Trade] = []
         if current is not None:
+            # Any direction or target-weight change closes the old simulated
+            # position first, realizing its PnL.
             created.extend(
                 self._close_position(
                     current,
@@ -146,6 +177,8 @@ class PaperTradeExecutor:
                 )
             )
         if target_side is not None:
+            # A zero signal closes the position and opens nothing; a nonzero
+            # signal creates the new target-side entry.
             entry = self._create_entry(
                 symbol=normalized_symbol,
                 side=target_side,
@@ -161,6 +194,8 @@ class PaperTradeExecutor:
         return created
 
     def _current_position(self, symbol: str) -> OpenPosition | None:
+        # An entry is open when no matching exit exists for the same symbol and
+        # trade number. This derives positions from the durable trade ledger.
         row = self.connection.execute(
             """
             SELECT symbol, trade_number, trade_type, executed_at, order_id, signal,
@@ -183,6 +218,8 @@ class PaperTradeExecutor:
         ).fetchone()
         if row is None:
             return None
+        # Convert the SQLite row back into the validated domain model before
+        # doing PnL or sizing calculations.
         trade = Trade(
             symbol=row[0],
             trade_number=row[1],
@@ -204,10 +241,14 @@ class PaperTradeExecutor:
         return OpenPosition(trade=trade, side="long" if trade.trade_type.endswith("long") else "short")
 
     def _next_trade_number(self) -> int:
+        # Trade numbers are globally increasing in this database. They are
+        # labels for the CSV, not database primary keys.
         row = self.connection.execute("SELECT COALESCE(MAX(trade_number), 0) + 1 FROM trades").fetchone()
         return int(row[0])
 
     def _cumulative_pnl(self) -> float:
+        # Only exit rows realize PnL. Entry rows are zero-PnL records and must
+        # not be counted a second time.
         row = self.connection.execute(
             "SELECT COALESCE(SUM(net_pnl_usd), 0) FROM trades WHERE trade_type LIKE 'Exit %'"
         ).fetchone()
@@ -220,10 +261,14 @@ class PaperTradeExecutor:
         signal: float,
         price: float,
     ) -> float:
+        # A fixed quantity is useful for controlled tests. Otherwise size the
+        # position so abs(signal)=1 means approximately 100% of equity.
         if self.fixed_quantity is not None:
             return self.fixed_quantity
         equity = self.initial_equity_usd + self._cumulative_pnl()
         if current is not None:
+            # Include the current position's unrealized PnL when calculating the
+            # equity available for the new target size.
             direction = 1 if current.side == "long" else -1
             equity += direction * (price - current.trade.price) * current.trade.size_qty
         return abs(signal) * equity / price
@@ -238,6 +283,7 @@ class PaperTradeExecutor:
         quantity: float,
         executed_at: datetime,
     ) -> Trade:
+        # An entry starts a new trade number and has no realized PnL yet.
         trade_number = self._next_trade_number()
         cumulative = self._cumulative_pnl()
         return Trade(
@@ -266,6 +312,8 @@ class PaperTradeExecutor:
         signal: float,
         executed_at: datetime,
     ) -> list[Trade]:
+        # Calculate signed PnL using the original side and quantity. A short
+        # profits when the exit price is lower than its entry price.
         entry = position.trade
         pnl = (
             (price - entry.price) * entry.size_qty
@@ -290,6 +338,8 @@ class PaperTradeExecutor:
             cumulative_pnl_usd=cumulative,
             cumulative_pnl_pct=0.0,
         )
+        # TradingView-style exports repeat the final PnL on the entry row, so
+        # update the original entry and also add a separate exit row.
         updated_entry = Trade(
             **{
                 field: getattr(entry, field)
@@ -304,6 +354,8 @@ class PaperTradeExecutor:
             cumulative_pnl_pct=0.0,
             imported_at_ms=entry.imported_at_ms,
         )
+        # The entry update and exit insert share one transaction: either both
+        # rows are stored or neither is.
         with self.connection:
             upsert_trade(self.connection, updated_entry)
             upsert_trade(self.connection, exit_trade)

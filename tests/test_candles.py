@@ -1,4 +1,4 @@
-"""Tests for the normalized SQLite candle model."""
+"""Tests for candle normalization, constraints, and upsert behavior."""
 
 import sqlite3
 import unittest
@@ -8,6 +8,7 @@ from crypto_trader.data import Candle, create_candles_table, fetch_hourly, upser
 
 class CandleModelTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Use memory so the test never changes the real trading database.
         self.connection = sqlite3.connect(":memory:")
         create_candles_table(self.connection)
 
@@ -16,6 +17,7 @@ class CandleModelTests(unittest.TestCase):
 
     @staticmethod
     def candle(**changes) -> Candle:
+        # Provide one valid baseline and let individual tests override fields.
         values = {
             "exchange": "coinbase",
             "symbol": "BTC-USD",
@@ -32,9 +34,11 @@ class CandleModelTests(unittest.TestCase):
         return Candle(**values)
 
     def test_existing_market_data_import_is_preserved(self) -> None:
+        # The refactor must continue exporting the Yahoo helper through data.
         self.assertTrue(callable(fetch_hourly))
 
     def test_insert_and_normalize_candle(self) -> None:
+        # Whitespace/case normalization happens before the row is inserted.
         candle = self.candle(exchange=" Coinbase ", symbol=" btc-usd ")
         candle_id = upsert_candle(self.connection, candle)
 
@@ -45,6 +49,7 @@ class CandleModelTests(unittest.TestCase):
         self.assertEqual(row, ("coinbase", "BTC-USD", 60, 60_050.0))
 
     def test_duplicate_natural_key_updates_one_row(self) -> None:
+        # Replaying the same exchange/time key updates the existing candle.
         first_id = upsert_candle(self.connection, self.candle())
         second_id = upsert_candle(
             self.connection,
@@ -58,6 +63,7 @@ class CandleModelTests(unittest.TestCase):
         self.assertEqual((count, close, volume), (1, 60_075.0, 15.0))
 
     def test_same_candle_time_can_exist_on_multiple_exchanges(self) -> None:
+        # The exchange is part of the natural key, so venues do not collide.
         upsert_candle(self.connection, self.candle())
         upsert_candle(
             self.connection,
@@ -68,10 +74,12 @@ class CandleModelTests(unittest.TestCase):
         self.assertEqual(count, 2)
 
     def test_invalid_price_range_is_rejected(self) -> None:
+        # Dataclass validation catches impossible OHLC values early.
         with self.assertRaises(ValueError):
             self.candle(high=59_950.0)
 
     def test_database_constraints_reject_negative_volume(self) -> None:
+        # SQLite STRICT/check constraints protect callers that bypass the model.
         with self.assertRaises(sqlite3.IntegrityError):
             self.connection.execute(
                 """

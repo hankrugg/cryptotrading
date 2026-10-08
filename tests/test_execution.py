@@ -1,4 +1,4 @@
-"""Tests for local paper-trade execution."""
+"""Tests for local paper-trade execution and PnL accounting."""
 
 from datetime import datetime, timezone
 import sqlite3
@@ -9,6 +9,7 @@ from crypto_trader.execution import PaperTradeExecutor
 
 class PaperTradeExecutorTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Each test starts with a clean $100 paper account in memory.
         self.connection = sqlite3.connect(":memory:")
         self.executor = PaperTradeExecutor(
             self.connection,
@@ -20,6 +21,7 @@ class PaperTradeExecutorTests(unittest.TestCase):
         self.connection.close()
 
     def test_signal_opens_once_and_zero_closes_with_pnl(self) -> None:
+        # Same target is a no-op; zero target closes and realizes the gain.
         opened = self.executor.apply_signal(
             symbol="COINBASE:SOLUSD",
             signal=1.0,
@@ -48,6 +50,8 @@ class PaperTradeExecutorTests(unittest.TestCase):
         self.assertEqual(rows, [("Entry long", 10.0), ("Exit long", 10.0)])
 
     def test_opposite_signal_closes_then_opens(self) -> None:
+        # Reversing direction creates an exit for the old side and an entry for
+        # the new side in one apply_signal call.
         self.executor.apply_signal(
             symbol="COINBASE:SOLUSD",
             signal=1.0,
@@ -66,6 +70,7 @@ class PaperTradeExecutorTests(unittest.TestCase):
         )
 
     def test_signal_weight_change_rebalances_quantity(self) -> None:
+        # Moving from 50% to 100% target weight closes/reopens at new size.
         self.executor.apply_signal(
             symbol="COINBASE:SOLUSD",
             signal=0.5,

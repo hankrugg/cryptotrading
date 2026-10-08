@@ -1,4 +1,9 @@
-"""SQLite model for TradingView paper-trading export rows."""
+"""SQLite model for TradingView-shaped paper-trading rows.
+
+The table is a durable local ledger. An entry and its later exit are separate
+rows with the same ``trade_number``; the exit row carries the realized PnL and
+the entry row is updated to carry the same final totals for CSV compatibility.
+"""
 
 from dataclasses import dataclass, field
 import csv
@@ -28,13 +33,16 @@ TRADINGVIEW_TRADE_HEADERS = (
 
 TRADES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
+    -- Internal SQLite row identifier.
     id INTEGER PRIMARY KEY,
+    -- These columns mirror TradingView's exported columns.
     symbol TEXT NOT NULL CHECK (length(trim(symbol)) > 0),
     trade_number INTEGER NOT NULL CHECK (trade_number > 0),
     trade_type TEXT NOT NULL CHECK (length(trim(trade_type)) > 0),
     executed_at TEXT NOT NULL CHECK (length(trim(executed_at)) > 0),
     order_id TEXT NOT NULL CHECK (length(trim(order_id)) > 0),
     signal TEXT NOT NULL CHECK (length(trim(signal)) > 0),
+    -- Numeric fields are kept as REAL so PnL and sizing can be calculated.
     price REAL NOT NULL CHECK (price > 0),
     size_qty REAL NOT NULL CHECK (size_qty > 0),
     size_value REAL NOT NULL CHECK (size_value >= 0),
@@ -43,7 +51,9 @@ CREATE TABLE IF NOT EXISTS trades (
     commission_usd REAL NOT NULL CHECK (commission_usd >= 0),
     cumulative_pnl_usd REAL NOT NULL,
     cumulative_pnl_pct REAL NOT NULL,
+    -- The import timestamp records when this local row was written.
     imported_at_ms INTEGER NOT NULL CHECK (imported_at_ms >= 0),
+    -- This is the stable identity used when importing/updating a CSV row.
     UNIQUE (symbol, trade_number, trade_type, order_id)
 ) STRICT;
 """
@@ -71,12 +81,15 @@ class Trade:
     id: int | None = None
 
     def __post_init__(self) -> None:
+        # Strip whitespace and normalize symbols at the application boundary so
+        # values coming from CSV files and strategy code behave the same way.
         object.__setattr__(self, "symbol", self.symbol.strip().upper())
         object.__setattr__(self, "trade_type", self.trade_type.strip())
         object.__setattr__(self, "executed_at", self.executed_at.strip())
         object.__setattr__(self, "order_id", self.order_id.strip())
         object.__setattr__(self, "signal", self.signal.strip())
 
+        # Validate required text fields and the positive trade number first.
         if not self.symbol or not self.trade_type or not self.executed_at:
             raise ValueError("symbol, trade_type, and executed_at are required")
         if not self.order_id or not self.signal:
@@ -86,6 +99,8 @@ class Trade:
         if self.imported_at_ms < 0:
             raise ValueError("imported_at_ms cannot be negative")
 
+        # Every numeric value must be finite; otherwise a NaN could poison all
+        # later cumulative PnL calculations.
         numeric_values = (
             self.price,
             self.size_qty,
@@ -113,11 +128,14 @@ class Trade:
         """Build a trade from one row using TradingView's exported headers."""
 
         def number(header: str) -> float:
+            # Keep conversion errors tied to the specific TradingView column so
+            # a bad CSV row is easy to diagnose.
             try:
                 return float(row[header].strip())
             except (KeyError, AttributeError, TypeError, ValueError) as error:
                 raise ValueError(f"invalid {header} value") from error
 
+        # Constructing Trade performs the remaining normalization and checks.
         try:
             trade = cls(
                 symbol=row["Symbol"],
@@ -147,7 +165,10 @@ class Trade:
 
 def create_trades_table(connection: sqlite3.Connection) -> None:
     """Create the normalized paper-trade table and lookup indexes."""
+    # The runner and importer both call this, so creation is intentionally
+    # idempotent.
     connection.execute(TRADES_SCHEMA)
+    # These indexes support the common export and open-position lookups.
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_trades_executed_at ON trades (executed_at)"
     )
@@ -158,6 +179,8 @@ def create_trades_table(connection: sqlite3.Connection) -> None:
 
 def upsert_trade(connection: sqlite3.Connection, trade: Trade) -> int:
     """Insert a trade or update the same exported row on re-import."""
+    # Re-importing the same TradingView row updates its values rather than
+    # duplicating it. A newly generated paper order ID creates a new row.
     connection.execute(
         """
         INSERT INTO trades (
@@ -197,6 +220,8 @@ def upsert_trade(connection: sqlite3.Connection, trade: Trade) -> int:
             trade.imported_at_ms,
         ),
     )
+    # Fetch the internal ID after the upsert so callers can confirm what row was
+    # stored without relying on SQLite-specific RETURNING behavior.
     row = connection.execute(
         """
         SELECT id FROM trades
@@ -211,7 +236,11 @@ def upsert_trade(connection: sqlite3.Connection, trade: Trade) -> int:
 
 def export_trades_csv(connection: sqlite3.Connection) -> str:
     """Return all stored trades in TradingView-compatible CSV column order."""
+    # Ensure the table exists even when a caller asks for an export before the
+    # first trade has been generated.
     create_trades_table(connection)
+    # Exits are ordered before entries for each trade number, matching the
+    # format in the user's TradingView export.
     rows = connection.execute(
         """
         SELECT symbol, trade_number, trade_type, executed_at, order_id, signal,

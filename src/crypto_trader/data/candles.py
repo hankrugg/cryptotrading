@@ -1,4 +1,9 @@
-"""SQLite model for normalized exchange candles."""
+"""SQLite model for normalized exchange candles.
+
+The Binance collector turns each completed one-minute API row into a
+``Candle`` and upserts it into this table. Times are UTC Unix milliseconds so
+the database does not depend on the Raspberry Pi's local timezone.
+"""
 
 from dataclasses import dataclass, field
 import math
@@ -8,22 +13,31 @@ import time
 
 CANDLES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS candles (
+    -- Internal row identifier. The exchange/time columns below identify a
+    -- market candle; this ID is only a convenient SQLite primary key.
     id INTEGER PRIMARY KEY,
+    -- Normalized venue and symbol names make queries consistent.
     exchange TEXT NOT NULL
         CHECK (length(trim(exchange)) > 0 AND exchange = lower(exchange)),
     symbol TEXT NOT NULL
         CHECK (length(trim(symbol)) > 0 AND symbol = upper(symbol)),
+    -- interval_seconds=60 identifies the one-minute collector data.
     interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0),
+    -- The candle's opening time, expressed as UTC Unix milliseconds.
     open_time_ms INTEGER NOT NULL CHECK (open_time_ms >= 0),
+    -- Standard OHLCV market data.
     open REAL NOT NULL CHECK (open > 0),
     high REAL NOT NULL CHECK (high > 0),
     low REAL NOT NULL CHECK (low > 0),
     close REAL NOT NULL CHECK (close > 0),
     volume REAL NOT NULL CHECK (volume >= 0),
+    -- Time when this row was written locally, not when the candle occurred.
     ingested_at_ms INTEGER NOT NULL CHECK (ingested_at_ms >= 0),
+    -- These checks reject impossible candles before they enter the database.
     CHECK (high >= low),
     CHECK (high >= open AND high >= close),
     CHECK (low <= open AND low <= close),
+    -- Re-fetching a candle updates it instead of creating a duplicate row.
     UNIQUE (exchange, symbol, interval_seconds, open_time_ms)
 ) STRICT;
 """
@@ -36,7 +50,11 @@ ON candles (interval_seconds, open_time_ms);
 
 @dataclass(frozen=True, slots=True)
 class Candle:
-    """A completed OHLCV candle normalized to UTC Unix milliseconds."""
+    """A completed OHLCV candle normalized to UTC Unix milliseconds.
+
+    The dataclass repeats the database checks so malformed API data is rejected
+    before an INSERT is attempted.
+    """
 
     exchange: str
     symbol: str
@@ -51,11 +69,14 @@ class Candle:
     id: int | None = None
 
     def __post_init__(self) -> None:
+        # Normalize names once at the boundary: exchange is lowercase and
+        # symbols are uppercase everywhere after construction.
         exchange = self.exchange.strip().lower()
         symbol = self.symbol.strip().upper()
         object.__setattr__(self, "exchange", exchange)
         object.__setattr__(self, "symbol", symbol)
 
+        # Validate identifiers and timestamps first.
         if not exchange:
             raise ValueError("exchange cannot be empty")
         if not symbol:
@@ -67,6 +88,8 @@ class Candle:
         if self.ingested_at_ms < 0:
             raise ValueError("ingested_at_ms cannot be negative")
 
+        # Reject NaN/infinite prices because they make later PnL and risk math
+        # meaningless, then enforce the basic OHLC ordering rules.
         prices = (self.open, self.high, self.low, self.close)
         if any(not math.isfinite(value) or value <= 0 for value in prices):
             raise ValueError("OHLC prices must be finite and positive")
@@ -80,12 +103,17 @@ class Candle:
 
 def create_candles_table(connection: sqlite3.Connection) -> None:
     """Create the candles table and its cross-symbol time index."""
+    # IF NOT EXISTS makes this safe to call from every collector startup.
     connection.execute(CANDLES_SCHEMA)
+    # This index supports queries that ask for the newest candle across symbols
+    # or intervals, which the risk monitor does frequently.
     connection.execute(CANDLES_TIME_INDEX)
 
 
 def upsert_candle(connection: sqlite3.Connection, candle: Candle) -> int:
     """Insert a candle or refresh the same venue candle after a backfill."""
+    # The composite UNIQUE key is the conflict target. If Binance revises a
+    # candle during a backfill, only its OHLCV values and ingest time change.
     connection.execute(
         """
         INSERT INTO candles (
@@ -122,6 +150,8 @@ def upsert_candle(connection: sqlite3.Connection, candle: Candle) -> int:
             candle.ingested_at_ms,
         ),
     )
+    # SQLite's INSERT statement above does not return the ID on all supported
+    # versions, so read it back using the same natural key.
     row = connection.execute(
         """
         SELECT id

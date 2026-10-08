@@ -42,6 +42,8 @@ src/crypto_trader/
 notebooks/
     SMA_Backtest.ipynb
     MeanReversion_Backtest.ipynb
+    Strategy_Comparison_Backtest.ipynb
+    MultiAsset_Portfolio_Backtest.ipynb
 ```
 
 The notebooks retain their experimental strategies, backtests, and metrics.
@@ -105,6 +107,18 @@ Run continuously on the Raspberry Pi:
 ```bash
 crypto-candles
 ```
+
+To perform a one-time historical backfill, choose the symbols and number of
+days explicitly. This command fills the database and exits; it does not change
+the continuous service behavior:
+
+```bash
+crypto-candles --backfill-days 30 --symbols BTCUSDT ETHUSDT SOLUSDT XRPUSDT DOGEUSDT
+```
+
+The same operation can be run interactively in
+`notebooks/Database_Backfill_And_Inspection.ipynb`, which also displays row
+counts, time coverage, recent candles, and the SQLite schema.
 
 Use `--database /path/to/trading.db` to choose another SQLite file,
 `--symbols BTCUSDT ETHUSDT` to collect a subset, or `--base-url` to select a

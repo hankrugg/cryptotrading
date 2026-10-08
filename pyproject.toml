@@ -1,8 +1,11 @@
+# Build metadata for installing this src-layout Python package.
 [build-system]
 requires = ["setuptools>=70"]
 build-backend = "setuptools.build_meta"
 
 [project]
+# The installed distribution name is separate from the import package name
+# (crypto_trader) and from the three command-line entry points below.
 name = "crypto-trader-school"
 version = "0.1.0"
 description = "Crypto strategy research and manual TradingView paper-trading infrastructure"
@@ -11,6 +14,8 @@ requires-python = ">=3.11"
 dependencies = ["yfinance>=0.2.54,<2", "python-dotenv>=1,<2"]
 
 [project.scripts]
+# These commands are what systemd/manual operation invokes. Each points at a
+# Python main() function rather than duplicating shell logic.
 crypto-trader = "crypto_trader.main:main"
 crypto-candles = "crypto_trader.data.binance:main"
 crypto-risk = "crypto_trader.risk:main"

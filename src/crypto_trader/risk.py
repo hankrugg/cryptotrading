@@ -1,4 +1,10 @@
-"""Minute-by-minute portfolio risk metrics for the paper-trading account."""
+"""Minute-by-minute portfolio risk metrics for the paper-trading account.
+
+The monitor reads open positions from ``trades``, marks them with the newest
+one-minute ``candles``, calculates the requested policy metrics, and stores one
+``risk_snapshots`` row per minute. It reports violations; it does not itself
+hedge or close a position.
+"""
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -14,7 +20,10 @@ from crypto_trader.data import create_candles_table, create_trades_table
 
 logger = logging.getLogger(__name__)
 
+# These are the instruments treated as the approved liquid crypto universe.
 LIQUID_CRYPTO_BASES = frozenset({"BTC", "ETH", "SOL", "HYPE", "DOGE"})
+# Policy thresholds. The comparisons below use >=, so exactly 2x/5x/20%/10%
+# or 25% is considered a violation.
 MAX_SPOT_LEVERAGE = 2.0
 MAX_FUTURES_LEVERAGE = 5.0
 MAX_OTHER_EXPOSURE = 0.20
@@ -28,6 +37,8 @@ DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "database" / "trading.db"
 
 def base_symbol(symbol: str) -> str:
     """Normalize common TradingView/exchange symbols to an asset base."""
+    # Strip a venue prefix (COINBASE:) and quote suffixes so SOLUSD, SOLUSDT,
+    # and COINBASE:SOLUSD all compare as the base asset SOL.
     value = symbol.strip().upper().split(":")[-1].replace("-", "")
     for quote in ("USDT", "USDC", "USD", "BTC", "ETH"):
         if value.endswith(quote) and len(value) > len(quote):
@@ -54,19 +65,24 @@ class RiskPosition:
 
     @property
     def base(self) -> str:
+        # All liquid/other exposure tests operate on the normalized base asset.
         return base_symbol(self.symbol)
 
     @property
     def notional_usd(self) -> float:
+        # Notional ignores direction because gross exposure counts both long
+        # and short positions as positive size.
         return abs(self.quantity * self.current_price)
 
     @property
     def signed_delta_usd(self) -> float:
+        # Delta preserves direction so offsetting longs and shorts can net out.
         direction = 1 if self.side.lower() == "long" else -1
         return direction * self.quantity * self.current_price * self.delta
 
     @property
     def unrealized_pnl_usd(self) -> float:
+        # Longs gain when price rises; shorts gain when price falls.
         direction = 1 if self.side.lower() == "long" else -1
         return direction * (self.current_price - self.entry_price) * self.quantity
 
@@ -91,6 +107,8 @@ class RiskSnapshot:
 
     @property
     def can_open_new_positions(self) -> bool:
+        # This is a reporting decision only; the current executor does not call
+        # this property to block a strategy trade automatically.
         return self.status == "ok"
 
 
@@ -103,6 +121,8 @@ def evaluate_risk(
     captured_at_ms: int | None = None,
 ) -> RiskSnapshot:
     """Calculate policy metrics from currently marked positions."""
+    # Equity anchors all percentage limits. Refusing nonpositive anchors avoids
+    # division by zero and nonsensical drawdown percentages.
     if equity_usd <= 0 or day_start_equity_usd <= 0 or peak_equity_usd <= 0:
         raise ValueError("equity values must be positive")
 
@@ -110,6 +130,7 @@ def evaluate_risk(
         time.time_ns() // 1_000_000 if captured_at_ms is None else captured_at_ms
     )
     positions = tuple(positions)
+    # Compute the core measurements once, then evaluate each policy rule.
     gross = sum(position.notional_usd for position in positions)
     liquid = sum(
         position.notional_usd
@@ -134,6 +155,8 @@ def evaluate_risk(
         default=0.0,
     )
 
+    # Keep machine-readable violation names so emails/logs can list exactly
+    # which rule caused a non-ok status.
     violations: list[str] = []
     if any(position.asset_class.lower() != "crypto" for position in positions):
         violations.append("non_crypto_instrument")
@@ -160,6 +183,7 @@ def evaluate_risk(
     if max_drawdown >= MAX_DRAWDOWN:
         violations.append("max_drawdown_at_or_above_25_percent")
 
+    # Maximum drawdown takes precedence over the ordinary hedge/exit status.
     status = "halt_until_month_end" if max_drawdown >= MAX_DRAWDOWN else (
         "hedge_or_exit" if violations else "ok"
     )
@@ -182,8 +206,11 @@ def evaluate_risk(
 
 RISK_SNAPSHOTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS risk_snapshots (
+    -- Internal SQLite row identifier.
     id INTEGER PRIMARY KEY,
+    -- A snapshot is identified by the UTC capture millisecond.
     captured_at_ms INTEGER NOT NULL UNIQUE CHECK (captured_at_ms >= 0),
+    -- Account and exposure measurements at that instant.
     equity_usd REAL NOT NULL CHECK (equity_usd > 0),
     gross_exposure_usd REAL NOT NULL CHECK (gross_exposure_usd >= 0),
     delta_exposure_usd REAL NOT NULL CHECK (delta_exposure_usd >= 0),
@@ -194,6 +221,7 @@ CREATE TABLE IF NOT EXISTS risk_snapshots (
     other_exposure_pct REAL NOT NULL CHECK (other_exposure_pct >= 0),
     max_spot_leverage REAL NOT NULL CHECK (max_spot_leverage >= 0),
     max_futures_leverage REAL NOT NULL CHECK (max_futures_leverage >= 0),
+    -- Human-readable policy result plus a JSON list of individual violations.
     status TEXT NOT NULL CHECK (status IN ('ok', 'hedge_or_exit', 'halt_until_month_end')),
     violations_json TEXT NOT NULL
 ) STRICT;
@@ -201,6 +229,7 @@ CREATE TABLE IF NOT EXISTS risk_snapshots (
 
 
 def create_risk_snapshots_table(connection: sqlite3.Connection) -> None:
+    # Both the hourly email path and the minute monitor can safely call this.
     connection.execute(RISK_SNAPSHOTS_SCHEMA)
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_captured_at "
@@ -213,6 +242,8 @@ def record_risk_snapshot(
     snapshot: RiskSnapshot,
 ) -> int:
     """Insert or refresh a snapshot at the same timestamp."""
+    # Re-running a snapshot with the same capture time updates its measurements
+    # instead of creating a duplicate minute.
     create_risk_snapshots_table(connection)
     connection.execute(
         """
@@ -252,6 +283,8 @@ def record_risk_snapshot(
             json.dumps(snapshot.violations),
         ),
     )
+    # Unlike the trade helper, this function explicitly commits because the
+    # risk service may be the only writer in a given minute.
     connection.commit()
     row = connection.execute(
         "SELECT id FROM risk_snapshots WHERE captured_at_ms = ?",
@@ -268,6 +301,8 @@ def latest_risk_snapshot(
     before_ms: int | None = None,
 ) -> RiskSnapshot | None:
     """Read the most recent stored snapshot, optionally before a timestamp."""
+    # Emails use this to attach the newest available risk state to an hourly
+    # signal, even if the two services do not run at exactly the same instant.
     create_risk_snapshots_table(connection)
     query = """
         SELECT captured_at_ms, equity_usd, gross_exposure_usd, delta_exposure_usd,
@@ -307,6 +342,8 @@ def _first_snapshot_on_or_after(
     start_ms: int,
     before_ms: int,
 ) -> RiskSnapshot | None:
+    # The first snapshot in the current UTC day establishes the baseline for
+    # daily PnL/drawdown. If none exists, snapshot_once uses current equity.
     row = connection.execute(
         """
         SELECT captured_at_ms, equity_usd, gross_exposure_usd, delta_exposure_usd,
@@ -339,12 +376,17 @@ def _first_snapshot_on_or_after(
 
 
 def _sleep_until_next_minute(delay_seconds: float) -> None:
+    # Align the monitor to UTC minute boundaries rather than drifting by the
+    # amount of time each risk calculation takes.
     now = time.time()
     time.sleep(max(0.0, 60 - (now % 60) + delay_seconds))
 
 
 def _open_positions(connection: sqlite3.Connection) -> list[RiskPosition]:
     """Load unmatched paper entries and use their entry price as a fallback mark."""
+    # A paper position is an Entry row for which no matching Exit row exists.
+    # This is intentionally derived from the trade ledger; there is no separate
+    # positions table.
     create_trades_table(connection)
     rows = connection.execute(
         """
@@ -359,6 +401,7 @@ def _open_positions(connection: sqlite3.Connection) -> list[RiskPosition]:
           )
         """
     ).fetchall()
+    # Entry price is the fallback mark until a matching minute candle is found.
     return [
         RiskPosition(
             symbol=row[0],
@@ -376,8 +419,11 @@ def _mark_positions(
     connection: sqlite3.Connection,
     positions: list[RiskPosition],
 ) -> list[RiskPosition]:
+    # There is nothing to mark when the account has no open positions.
     if not positions:
         return positions
+    # Rows are newest-first. setdefault keeps the first close for each base,
+    # which is the latest available mark for that asset.
     rows = connection.execute(
         """
         SELECT symbol, close
@@ -400,6 +446,8 @@ def _mark_positions(
 
 
 def _realized_pnl(connection: sqlite3.Connection) -> float:
+    # Only exit rows realize PnL. Open positions contribute unrealized PnL in
+    # snapshot_once after they are marked.
     row = connection.execute(
         "SELECT COALESCE(SUM(net_pnl_usd), 0) FROM trades WHERE trade_type LIKE 'Exit %'"
     ).fetchone()
@@ -413,16 +461,21 @@ def snapshot_once(
     captured_at_ms: int | None = None,
 ) -> RiskSnapshot:
     """Mark current paper positions, evaluate policy, and persist one snapshot."""
+    # captured_at_ms is the observation time, not the trade candle time.
     if initial_equity_usd <= 0:
         raise ValueError("initial_equity_usd must be positive")
     captured_at_ms = (
         time.time_ns() // 1_000_000 if captured_at_ms is None else captured_at_ms
     )
+    # Ensure both source tables exist before querying them on a fresh database.
     create_candles_table(connection)
     positions = _mark_positions(connection, _open_positions(connection))
+    # Equity is starting cash plus realized PnL plus current unrealized PnL.
     equity = initial_equity_usd + _realized_pnl(connection)
     equity += sum(position.unrealized_pnl_usd for position in positions)
 
+    # Unix-day boundaries are UTC. The first saved snapshot in that day is the
+    # baseline for the daily drawdown calculation.
     day_start_ms = (captured_at_ms // DAY_MS) * DAY_MS
     create_risk_snapshots_table(connection)
     day_start = _first_snapshot_on_or_after(
@@ -431,6 +484,7 @@ def snapshot_once(
         before_ms=captured_at_ms,
     )
     day_start_equity = day_start.equity_usd if day_start else equity
+    # The historical equity peak is used to calculate maximum drawdown.
     previous_peak = connection.execute(
         "SELECT MAX(equity_usd) FROM risk_snapshots WHERE captured_at_ms < ?",
         (captured_at_ms,),
@@ -448,6 +502,8 @@ def snapshot_once(
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    # The risk service supports one-shot checks for testing and continuous
+    # minute polling for systemd.
     parser = argparse.ArgumentParser(
         description="Record minute-by-minute paper portfolio risk metrics."
     )
@@ -464,6 +520,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # This command has its own logging setup because it is launched separately
+    # from the hourly signal process.
     args = _parse_args(argv)
     if args.initial_equity <= 0 or args.poll_delay < 0:
         raise SystemExit("initial equity must be positive and poll delay non-negative")
@@ -472,11 +530,15 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
     args.database.parent.mkdir(parents=True, exist_ok=True)
+    # WAL/busy_timeout allow the hourly executor and candle collector to share
+    # this database without immediately failing on a short write lock.
     connection = sqlite3.connect(args.database, timeout=10.0)
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA journal_mode = WAL")
     try:
         while True:
+            # Each loop writes one point-in-time risk measurement, then aligns
+            # the next iteration to the following minute.
             snapshot = snapshot_once(
                 connection,
                 initial_equity_usd=args.initial_equity,

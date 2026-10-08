@@ -1,4 +1,4 @@
-"""Tests for portfolio risk metrics and persistence."""
+"""Tests for risk policy calculations and SQLite persistence."""
 
 import sqlite3
 import unittest
@@ -15,6 +15,8 @@ from crypto_trader.risk import (
 
 class RiskMetricTests(unittest.TestCase):
     def test_policy_metrics_and_drawdown_status(self) -> None:
+        # XRP is treated as non-liquid/other exposure, and the drawdowns cross
+        # both limits, so the strongest halt status must win.
         positions = [
             RiskPosition("BTCUSDT", "long", 1, 100, 100, leverage=1.0),
             RiskPosition("XRPUSDT", "long", 30, 100, 100, leverage=1.0),
@@ -33,6 +35,8 @@ class RiskMetricTests(unittest.TestCase):
         self.assertIn("max_drawdown_at_or_above_25_percent", snapshot.violations)
 
     def test_leverage_and_non_crypto_are_reported(self) -> None:
+        # Exactly 2x spot leverage is intentionally a violation because the
+        # policy comparison is greater-than-or-equal.
         snapshot = evaluate_risk(
             [
                 RiskPosition("BTCUSDT", "long", 1, 100, 100, leverage=2.0),
@@ -49,6 +53,7 @@ class RiskMetricTests(unittest.TestCase):
         self.assertIn("non_crypto_instrument", snapshot.violations)
 
     def test_snapshot_round_trip(self) -> None:
+        # Confirm that JSON violations and all numeric fields survive storage.
         connection = sqlite3.connect(":memory:")
         try:
             create_risk_snapshots_table(connection)
@@ -65,6 +70,7 @@ class RiskMetricTests(unittest.TestCase):
             connection.close()
 
     def test_snapshot_uses_realized_pnl_from_trades(self) -> None:
+        # A fresh empty account should produce a valid neutral snapshot.
         connection = sqlite3.connect(":memory:")
         try:
             snapshot = snapshot_once(

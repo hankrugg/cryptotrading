@@ -1,4 +1,4 @@
-"""Tests for the hourly email contents."""
+"""Tests for email formatting without sending a real message."""
 
 from email.message import EmailMessage
 from unittest.mock import patch
@@ -13,6 +13,8 @@ from crypto_trader.risk import evaluate_risk, record_risk_snapshot
 
 class NotificationTests(unittest.TestCase):
     def test_email_contains_risk_summary_and_csv_attachment(self) -> None:
+        # Build a risk row, mock SMTP, then inspect the exact MIME message that
+        # would have been sent to Gmail.
         connection = sqlite3.connect(":memory:")
         create_trades_table(connection)
         snapshot = evaluate_risk(

@@ -9,3 +9,14 @@ Suggested sequence:
 3. `03_portfolio_backtest.ipynb`
 4. `04_risk_report.ipynb`
 
+`Database_Backfill_And_Inspection.ipynb` is an operational notebook rather
+than a backtest. It runs a one-time Binance historical candle backfill and
+shows database coverage, recent rows, and the SQLite schema.
+
+`Strategy_Comparison_Backtest.ipynb` compares several target-weight strategies
+with the same train/test and turnover accounting used by the existing
+backtests.
+
+`MultiAsset_Portfolio_Backtest.ipynb` reads the Binance minute-candle database
+and evaluates a cross-sectional, volatility-weighted BTC/ETH/SOL/XRP/DOGE
+portfolio with exposure diagnostics.
