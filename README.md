@@ -17,7 +17,9 @@ crypto-trader
 Set `GMAIL_APP_PASSWORD` in the repository-root `.env` file.
 The application immediately fetches completed Yahoo hourly candles, evaluates
 the SOL-USD SMA-distance target (window 20, scale 10), and emails the allocation.
-It waits 3600 seconds after each iteration before repeating.
+Each hourly email now includes the latest minute risk snapshot and attaches the
+complete trade log as a CSV file. It waits 3600 seconds after each iteration
+before repeating.
 
 Logs go to the console and `logs/crypto-trader.log`, with rotation. Override
 the destination with `CRYPTO_TRADER_LOG_FILE` and verbosity with `LOG_LEVEL`.
@@ -32,7 +34,7 @@ src/crypto_trader/
     __main__.py          Module entry point
     main.py              Environment and application startup
     runner.py            Hourly strategy evaluation and scheduling
-    data/                Yahoo and Binance market-data loading
+    data/                Yahoo, Binance, and trade-record data models
     notifications.py     Email formatting and delivery
     logging_config.py    Console and rotating-file logging
     strategies/
@@ -43,9 +45,44 @@ notebooks/
 ```
 
 The notebooks retain their experimental strategies, backtests, and metrics.
-Experiment configuration, shared backtest/metrics modules, SQLite portfolio
-tracking, and Flask trade entry are planned, not implemented. Orders are
-entered manually in TradingView; this program only produces signals.
+Experiment configuration, shared backtest/metrics modules, and Flask trade
+entry are planned, not implemented. Orders are entered manually in TradingView;
+this program produces signals and records local paper fills.
+
+## TradingView trade records
+
+The `trades` table mirrors the columns in a TradingView paper-trading CSV,
+including entry/exit rows, order IDs, prices, quantities, PnL, returns,
+commissions, and cumulative totals. `Trade.from_csv_row()` converts a CSV row
+into the model, and `upsert_trade()` makes repeated imports safe. The table is
+created with `create_trades_table()` in the same `trading.db` database used for
+market candles.
+
+The hourly runner now uses `PaperTradeExecutor` to record simulated fills at
+the latest strategy candle close. A positive target opens or keeps a long
+position, a negative target opens or keeps a short position, and a zero target
+closes an open position. Repeating a signal in the same direction does not
+create duplicate trades. This is local paper execution for the trade log; it
+does not submit an order to TradingView or an exchange.
+
+## Minute risk monitoring
+
+`crypto-risk` records one risk snapshot per minute in the `risk_snapshots`
+table. It checks that positions are crypto, leverage stays below 2x for spot
+and 5x for futures, non-liquid exposure stays below 20% of equity, total
+delta stays below 2x equity, and drawdown stays below the 10% daily and 25%
+maximum limits. A snapshot is marked `hedge_or_exit` at a policy violation and
+`halt_until_month_end` at the maximum drawdown limit.
+
+Set the actual starting paper-account balance and run it as a separate service:
+
+```bash
+crypto-risk --initial-equity 100000
+```
+
+The monitor reports and records risk status; it does not submit a hedge or
+close an order automatically. That action should be wired to the paper
+executor after the desired policy response is confirmed.
 
 ## Binance minute candles
 

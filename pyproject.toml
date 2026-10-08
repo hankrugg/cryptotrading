@@ -13,6 +13,7 @@ dependencies = ["yfinance>=0.2.54,<2", "python-dotenv>=1,<2"]
 [project.scripts]
 crypto-trader = "crypto_trader.main:main"
 crypto-candles = "crypto_trader.data.binance:main"
+crypto-risk = "crypto_trader.risk:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

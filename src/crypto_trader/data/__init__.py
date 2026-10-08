@@ -2,6 +2,12 @@
 
 from crypto_trader.data.candles import Candle, create_candles_table, upsert_candle
 from crypto_trader.data.market import SYMBOLS, fetch_hourly
+from crypto_trader.data.trades import (
+    Trade,
+    create_trades_table,
+    export_trades_csv,
+    upsert_trade,
+)
 
 __all__ = [
     "Candle",
@@ -9,4 +15,8 @@ __all__ = [
     "create_candles_table",
     "fetch_hourly",
     "upsert_candle",
+    "Trade",
+    "create_trades_table",
+    "export_trades_csv",
+    "upsert_trade",
 ]
