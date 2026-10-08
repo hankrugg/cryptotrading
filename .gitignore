@@ -20,6 +20,7 @@ dist/
 .ipynb_checkpoints/
 
 # Generated market data and reports
+data/database/*
 data/raw/**
 data/interim/**
 data/processed/**
@@ -32,6 +33,7 @@ reports/figures/**
 logs/**
 
 # Keep directory markers
+!data/database/.gitkeep
 !data/raw/.gitkeep
 !data/interim/.gitkeep
 !data/processed/.gitkeep

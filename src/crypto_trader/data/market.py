@@ -1,9 +1,6 @@
 """Download completed hourly crypto prices from Yahoo Finance."""
 
-import argparse
-import time
 from datetime import datetime, timezone
-from pathlib import Path
 import logging
 
 import yfinance as yf
@@ -11,6 +8,7 @@ import yfinance as yf
 logger = logging.getLogger(__name__)
 
 SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "HYPE32196-USD", "DOGE-USD"]
+
 
 def fetch_hourly(period="5d"):
     """Fetch hourly OHLCV for the requested period, excluding the unfinished hour."""

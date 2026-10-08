@@ -28,9 +28,9 @@ python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' \
     || fail "Python 3.11 or newer is required"
 
 # These characters need additional escaping in systemd unit values. Rejecting
-# them keeps the generated unit predictable while still allowing spaces.
-if [[ "${PROJECT_DIR}" == *%* || "${PROJECT_DIR}" == *\"* || "${PROJECT_DIR}" == *\\* || "${PROJECT_DIR}" == *$'\n'* ]]; then
-    fail "the project path cannot contain percent signs, quotes, backslashes, or newlines: ${PROJECT_DIR}"
+# them keeps the generated unit compatible with Raspberry Pi OS systemd.
+if [[ "${PROJECT_DIR}" == *%* || "${PROJECT_DIR}" == *\$* || "${PROJECT_DIR}" == *\"* || "${PROJECT_DIR}" == *\\* || "${PROJECT_DIR}" == *$'\n'* ]]; then
+    fail "the project path cannot contain percent signs, dollar signs, quotes, backslashes, or newlines: ${PROJECT_DIR}"
 fi
 
 if [[ ! -x "${VENV_PYTHON}" ]]; then
@@ -65,7 +65,7 @@ trap 'rm -f -- "${UNIT_FILE}"' EXIT
         'Type=simple' \
         "User=${SERVICE_USER}" \
         "Group=${SERVICE_GROUP}" \
-        "WorkingDirectory=\"${PROJECT_DIR}\"" \
+        "WorkingDirectory=${PROJECT_DIR}" \
         "ExecStart=\"${VENV_PYTHON}\" -m crypto_trader" \
         'Environment=PYTHONUNBUFFERED=1' \
         'Restart=on-failure' \
