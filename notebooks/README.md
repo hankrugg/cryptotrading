@@ -21,6 +21,11 @@ seconds, then saves separate CSV samples under `data/ticks/`.
 Level 2 capture, rebuilds the book from its snapshot and updates, checks basic
 data consistency, and saves one-second best-price and depth features.
 
+`Coinbase_Order_Book_Features.ipynb` aligns reconstructed book states and
+trades on a causal one-second timeline, constructs book, return, volatility,
+and trade-flow features, creates future-return targets, and saves a dataset for
+strategy research.
+
 `Strategy_Comparison_Backtest.ipynb` compares several target-weight strategies
 with the same train/test and turnover accounting used by the existing
 backtests.
