@@ -1,8 +1,8 @@
 """Download completed hourly crypto prices from Yahoo Finance.
 
 This module is used by the hourly strategy runner. It is separate from the
-Binance collector: the strategy currently reads Yahoo hourly bars, while the
-risk monitor uses the locally stored Binance minute candles for marks.
+Coinbase collector: the strategy currently reads Yahoo hourly bars, while the
+risk monitor uses the locally stored Coinbase minute candles for marks.
 """
 
 from datetime import datetime, timezone

@@ -34,7 +34,8 @@ src/crypto_trader/
     __main__.py          Module entry point
     main.py              Environment and application startup
     runner.py            Hourly strategy evaluation and scheduling
-    data/                Yahoo, Binance, and trade-record data models
+    data/                Yahoo, Coinbase, and trade-record data models
+        coinbase_candles.py Public one-minute candle collector
         coinbase_ticks.py  Continuous public trade/Level 2 collector
         rotating_writer.py Durable gzip-CSV rotation and book checkpoints
         upload.py          Independent rclone backup command
@@ -91,13 +92,16 @@ The monitor reports and records risk status; it does not submit a hedge or
 close an order automatically. That action should be wired to the paper
 executor after the desired policy response is confirmed.
 
-## Binance minute candles
+## Coinbase minute candles
 
 The `crypto-candles` command stores completed one-minute candles for
-`BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, and `DOGEUSDT` in
-`data/database/trading.db`. It uses Binance's public market-data API, so no
-API key is required. The first run backfills up to 1,000 minutes per symbol;
-later runs resume from the latest stored candle and fill any gap.
+`BTC-USD`, `ETH-USD`, `SOL-USD`, `XRP-USD`, and `DOGE-USD` in
+`data/database/trading.db`. It uses Coinbase Advanced Trade's public candle and
+server-time endpoints, so no API key is required. The first run backfills up to
+350 minutes per product; later runs resume from the latest stored candle.
+Coinbase occasionally omits individual historical minute buckets. The
+collector warns about those source gaps and continues without manufacturing a
+zero-volume candle or a fake price.
 
 Run one collection cycle while testing:
 
@@ -111,23 +115,23 @@ Run continuously on the Raspberry Pi:
 crypto-candles
 ```
 
-To perform a one-time historical backfill, choose the symbols and number of
+To perform a one-time historical backfill, choose the products and number of
 days explicitly. This command fills the database and exits; it does not change
 the continuous service behavior:
 
 ```bash
-crypto-candles --backfill-days 30 --symbols BTCUSDT ETHUSDT SOLUSDT XRPUSDT DOGEUSDT
+crypto-candles --backfill-days 30 \
+  --products BTC-USD ETH-USD SOL-USD XRP-USD DOGE-USD
 ```
 
 The same operation can be run interactively in
-`notebooks/Database_Backfill_And_Inspection.ipynb`, which also displays row
-counts, time coverage, recent candles, and the SQLite schema.
+`notebooks/Coinbase_Candle_Backfill_And_Inspection.ipynb`, which also displays
+row counts, time coverage, recent candles, and the SQLite schema.
 
-Use `--database /path/to/trading.db` to choose another SQLite file,
-`--symbols BTCUSDT ETHUSDT` to collect a subset, or `--base-url` to select a
-Binance-compatible public endpoint such as Binance.US. The collector stores
-only closed candles and is safe to restart; its unique key prevents duplicate
-rows.
+Use `--database /path/to/trading.db` to choose another SQLite file or
+`--products BTC-USD ETH-USD` to collect a subset. `--symbols` remains an alias
+for `--products` during the transition. The collector stores only closed
+candles and is safe to restart; its unique key prevents duplicate rows.
 
 ## Database storage
 

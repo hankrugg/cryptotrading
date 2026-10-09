@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 # The installed distribution name is separate from the import package name
-# (crypto_trader) and from the three command-line entry points below.
+# (crypto_trader) and from the command-line entry points below.
 name = "crypto-trader-school"
 version = "0.1.0"
 description = "Crypto strategy research and manual TradingView paper-trading infrastructure"
@@ -21,7 +21,7 @@ dependencies = [
 # These commands are what systemd/manual operation invokes. Each points at a
 # Python main() function rather than duplicating shell logic.
 crypto-trader = "crypto_trader.main:main"
-crypto-candles = "crypto_trader.data.binance:main"
+crypto-candles = "crypto_trader.data.coinbase_candles:main"
 crypto-risk = "crypto_trader.risk:main"
 crypto-coinbase-ticks = "crypto_trader.data.coinbase_ticks:main"
 crypto-upload-ticks = "crypto_trader.data.upload:main"

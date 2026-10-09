@@ -1,6 +1,6 @@
 """Local paper-trade execution for strategy target signals.
 
-This module is intentionally local-only. It never calls TradingView, Binance,
+This module is intentionally local-only. It never calls TradingView, Coinbase,
 or another order API. It converts a strategy target in ``[-1, 1]`` into rows in
 the SQLite ``trades`` table and calculates simulated PnL when a position is
 closed or reversed.

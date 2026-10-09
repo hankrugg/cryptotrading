@@ -9,9 +9,11 @@ Suggested sequence:
 3. `03_portfolio_backtest.ipynb`
 4. `04_risk_report.ipynb`
 
-`Database_Backfill_And_Inspection.ipynb` is an operational notebook rather
-than a backtest. It runs a one-time Binance historical candle backfill and
-shows database coverage, recent rows, and the SQLite schema.
+`Coinbase_Candle_Backfill_And_Inspection.ipynb` is an operational notebook
+rather than a backtest. It runs a one-time Coinbase historical candle backfill
+and shows database coverage, recent rows, and the SQLite schema. Coinbase can
+omit individual historical buckets; the collector reports those source gaps
+but does not invent replacement candles.
 
 `Coinbase_Tick_Data.ipynb` is a minimal public-WebSocket example. It captures
 individual `SOL-USD` market trades and Level 2 price-level updates for a few
@@ -33,6 +35,6 @@ strategy research.
 with the same train/test and turnover accounting used by the existing
 backtests.
 
-`MultiAsset_Portfolio_Backtest.ipynb` reads the Binance minute-candle database
+`MultiAsset_Portfolio_Backtest.ipynb` reads the minute-candle database
 and evaluates a cross-sectional, volatility-weighted BTC/ETH/SOL/XRP/DOGE
 portfolio with exposure diagnostics.

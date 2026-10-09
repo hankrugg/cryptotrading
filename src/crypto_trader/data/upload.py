@@ -46,12 +46,14 @@ def build_rclone_command(
         # Completed filenames are unique and immutable.  Refusing to overwrite
         # a different remote object is safer than silently replacing data.
         "--immutable",
-        "--include",
-        "**/*.csv.gz",
-        "--include",
-        "**/*.csv.gz.manifest.json",
-        "--exclude",
-        "*",
+        # Use one ordered filter list. Mixing --include and --exclude makes
+        # their relative order undefined in rclone and produces a warning.
+        "--filter",
+        "+ **/*.csv.gz",
+        "--filter",
+        "+ **/*.csv.gz.manifest.json",
+        "--filter",
+        "- **",
         "--checkers",
         "4",
         "--transfers",

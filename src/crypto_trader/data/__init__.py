@@ -14,7 +14,7 @@ from crypto_trader.data.trades import (
 )
 
 __all__ = [
-    # Binance candle model and the Yahoo hourly-data helper.
+    # Coinbase candle model and the Yahoo hourly-data helper.
     "Candle",
     "SYMBOLS",
     "create_candles_table",

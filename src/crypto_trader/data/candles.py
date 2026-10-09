@@ -1,6 +1,6 @@
 """SQLite model for normalized exchange candles.
 
-The Binance collector turns each completed one-minute API row into a
+The Coinbase collector turns each completed one-minute API row into a
 ``Candle`` and upserts it into this table. Times are UTC Unix milliseconds so
 the database does not depend on the Raspberry Pi's local timezone.
 """
@@ -112,7 +112,7 @@ def create_candles_table(connection: sqlite3.Connection) -> None:
 
 def upsert_candle(connection: sqlite3.Connection, candle: Candle) -> int:
     """Insert a candle or refresh the same venue candle after a backfill."""
-    # The composite UNIQUE key is the conflict target. If Binance revises a
+    # The composite UNIQUE key is the conflict target. If Coinbase revises a
     # candle during a backfill, only its OHLCV values and ingest time change.
     connection.execute(
         """
