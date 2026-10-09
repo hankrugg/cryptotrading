@@ -13,6 +13,14 @@ Suggested sequence:
 than a backtest. It runs a one-time Binance historical candle backfill and
 shows database coverage, recent rows, and the SQLite schema.
 
+`Coinbase_Tick_Data.ipynb` is a minimal public-WebSocket example. It captures
+individual `SOL-USD` market trades and Level 2 price-level updates for a few
+seconds, then saves separate CSV samples under `data/ticks/`.
+
+`Coinbase_Order_Book_Reconstruction.ipynb` loads the newest saved Coinbase
+Level 2 capture, rebuilds the book from its snapshot and updates, checks basic
+data consistency, and saves one-second best-price and depth features.
+
 `Strategy_Comparison_Backtest.ipynb` compares several target-weight strategies
 with the same train/test and turnover accounting used by the existing
 backtests.

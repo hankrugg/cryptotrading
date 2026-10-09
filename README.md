@@ -137,6 +137,28 @@ SQLite journal/WAL files, and backups placed here are ignored. Each checkout
 Back up the database separately using SQLite's backup facilities once it is
 in use.
 
+## Future production considerations
+
+The current Coinbase Level 2 work is suitable for collection, reconstruction,
+and initial research. Revisit these timing details before using it as a live
+trading system:
+
+- Record `received_at_ns` immediately after receiving the raw WebSocket
+  message, before JSON decoding or book calculations.
+- Preserve separate `book_updated_at_ns`, `features_ready_at_ns`, and (when
+  applicable) `order_sent_at_ns` timestamps. Do not overwrite the original
+  receipt time or combine the stages into one timestamp.
+- Measure actual processing-latency distributions under realistic load,
+  including median, p95, p99, and worst-case delays. Avoid assuming that a
+  fixed delay such as 5 ms accurately represents busy periods or backlogs.
+- Use `features_ready_at_ns` or a later actionable timestamp in backtests so a
+  strategy cannot act before its inputs would have been calculated. Add order
+  submission and exchange latency when modeling fills.
+- Do not add historical notebook replay time to market receipt timestamps.
+  Offline replay reconstructs old data; a production process incrementally
+  updates an already-live book and should measure that live processing time
+  separately.
+
 ## Git workflow
 
 Review and commit the structural refactor:

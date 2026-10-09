@@ -25,6 +25,7 @@ data/raw/**
 data/interim/**
 data/processed/**
 data/manifests/**
+data/ticks/**
 data/.collector.lock
 data/yahoo_hourly.json
 data/yahoo_hourly.tmp
