@@ -11,7 +11,11 @@ version = "0.1.0"
 description = "Crypto strategy research and manual TradingView paper-trading infrastructure"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["yfinance>=0.2.54,<2", "python-dotenv>=1,<2"]
+dependencies = [
+    "python-dotenv>=1,<2",
+    "websockets>=14,<17",
+    "yfinance>=0.2.54,<2",
+]
 
 [project.scripts]
 # These commands are what systemd/manual operation invokes. Each points at a
@@ -19,6 +23,8 @@ dependencies = ["yfinance>=0.2.54,<2", "python-dotenv>=1,<2"]
 crypto-trader = "crypto_trader.main:main"
 crypto-candles = "crypto_trader.data.binance:main"
 crypto-risk = "crypto_trader.risk:main"
+crypto-coinbase-ticks = "crypto_trader.data.coinbase_ticks:main"
+crypto-upload-ticks = "crypto_trader.data.upload:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

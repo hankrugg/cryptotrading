@@ -35,6 +35,9 @@ src/crypto_trader/
     main.py              Environment and application startup
     runner.py            Hourly strategy evaluation and scheduling
     data/                Yahoo, Binance, and trade-record data models
+        coinbase_ticks.py  Continuous public trade/Level 2 collector
+        rotating_writer.py Durable gzip-CSV rotation and book checkpoints
+        upload.py          Independent rclone backup command
     notifications.py     Email formatting and delivery
     logging_config.py    Console and rotating-file logging
     strategies/
@@ -137,6 +140,108 @@ SQLite journal/WAL files, and backups placed here are ignored. Each checkout
 Back up the database separately using SQLite's backup facilities once it is
 in use.
 
+## Continuous Coinbase tick collection
+
+The notebook example is intentionally small and keeps its rows in memory. The
+continuous collector streams public Coinbase `market_trades`, `level2`, and
+`heartbeats` messages for all five research products directly to compressed
+files:
+
+```bash
+crypto-coinbase-ticks
+```
+
+The default products are `BTC-USD`, `ETH-USD`, `SOL-USD`, `DOGE-USD`, and
+`XRP-USD`. No Coinbase credentials are required because the collector uses
+only public market-data channels. Run a short, cleanly terminated smoke test
+before installing the service:
+
+```bash
+crypto-coinbase-ticks --products BTC-USD SOL-USD --run-seconds 30
+```
+
+Data is partitioned by product and UTC date below `data/raw/coinbase/`. A
+separate trade and Level 2 gzip-CSV file is finalized each hour. While a file
+is open it ends in `.partial`; only a clean rotation or shutdown removes that
+suffix. Every completed file has a JSON sidecar manifest containing its row
+count, sequence range, compressed size, connection identifier, and SHA-256
+digest.
+
+```text
+data/raw/coinbase/
+    BTC-USD/
+        2026-10-09/
+            coinbase_BTC-USD_level2_20261009T140000Z_<connection>.csv.gz
+            coinbase_BTC-USD_level2_20261009T140000Z_<connection>.csv.gz.manifest.json
+            coinbase_BTC-USD_trades_20261009T140000Z_<connection>.csv.gz
+```
+
+The receive timestamp is captured before JSON decoding, book maintenance, and
+disk writing. Level 2 rows retain exchange event time, Coinbase message time,
+and local receipt time. Every reconnection has a new `connection_id`, requires
+a fresh exchange snapshot, and starts new output files. A connection-wide
+sequence gap also forces reconnection instead of continuing with a potentially
+invalid book.
+
+At an hourly boundary, the collector writes the current book into the new file
+before the first update. These rows are explicitly identified by
+`event_type=checkpoint` and `record_source=local_checkpoint`; they are not
+Coinbase events. Treat the first checkpoint group like a snapshot when replaying
+one hourly partition. Uninterrupted files that begin with Coinbase data instead
+start with `event_type=snapshot` and `record_source=exchange`.
+
+Install the collector on Raspberry Pi OS after cloning the repository:
+
+```bash
+./deploy/install-coinbase-collector-service.sh
+sudo journalctl -u coinbase-tick-collector -f
+```
+
+The service starts at boot, restarts after network failures, handles SIGTERM as
+a clean shutdown, and uses an advisory lock to prevent two collector instances
+from writing simultaneously. A sudden power loss can leave `.partial` files;
+they are retained for inspection and are never uploaded automatically.
+
+## Google Drive tick-data backup
+
+Google Drive backup is a separate process so an internet or Drive failure
+cannot stop local collection. Install `rclone`, create a Google Drive remote
+named `gdrive`, and test it as the same Linux user that will run the service:
+
+```bash
+rclone config
+rclone lsd gdrive:
+crypto-upload-ticks --remote gdrive:coinbase-data/raw
+```
+
+Rclone's shared Google client ID is being retired during 2026, so follow its
+[Google Drive setup instructions](https://rclone.org/drive/) and create a
+personal OAuth client ID for unattended use.
+
+After the manual upload works, install the fifteen-minute systemd timer:
+
+```bash
+./deploy/install-data-upload-timer.sh gdrive:coinbase-data/raw
+systemctl list-timers coinbase-data-upload.timer
+```
+
+The default uploader uses `rclone copy`, includes only completed gzip files and
+manifests, refuses to overwrite different remote objects, and never deletes
+local data. The optional `crypto-upload-ticks --move` mode removes local files
+only after rclone reports a successful transfer; do not enable it until remote
+uploads and restores have been verified. Monitor free space on the Pi while
+the non-destructive copy mode is active.
+
+Useful service commands:
+
+```bash
+sudo systemctl status coinbase-tick-collector
+sudo systemctl restart coinbase-tick-collector
+sudo systemctl stop coinbase-tick-collector
+sudo systemctl start coinbase-data-upload.service
+sudo journalctl -u coinbase-data-upload --since today
+```
+
 ## Future production considerations
 
 The current Coinbase Level 2 work is suitable for collection, reconstruction,
@@ -166,9 +271,9 @@ Review and commit the structural refactor:
 ```bash
 git status
 git diff
-git add README.md src/crypto_trader notebooks/SMA_Backtest.ipynb
+git add README.md notebooks/README.md pyproject.toml deploy src/crypto_trader tests
 git diff --cached
-git commit -m "Refactor signal runner into focused modules"
+git commit -m "Add continuous Coinbase tick collector"
 git push
 ```
 

@@ -15,7 +15,10 @@ shows database coverage, recent rows, and the SQLite schema.
 
 `Coinbase_Tick_Data.ipynb` is a minimal public-WebSocket example. It captures
 individual `SOL-USD` market trades and Level 2 price-level updates for a few
-seconds, then saves separate CSV samples under `data/ticks/`.
+seconds, then saves separate CSV samples under `data/ticks/`. It is a teaching
+and inspection notebook, not the unattended collector. Continuous five-product
+collection is implemented by `crypto-coinbase-ticks` under
+`src/crypto_trader/data/coinbase_ticks.py`.
 
 `Coinbase_Order_Book_Reconstruction.ipynb` loads the newest saved Coinbase
 Level 2 capture, rebuilds the book from its snapshot and updates, checks basic
