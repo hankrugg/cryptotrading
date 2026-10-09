@@ -2,7 +2,7 @@
 
 The package has three independent jobs:
 
-* collect one-minute Coinbase candles;
+* collect minute and historical hourly Coinbase candles;
 * calculate an hourly strategy signal and record a local paper trade; and
 * calculate minute-by-minute risk snapshots.
 

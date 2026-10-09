@@ -1,6 +1,6 @@
 """SQLite model for normalized exchange candles.
 
-The Coinbase collector turns each completed one-minute API row into a
+The Coinbase collector turns each completed API row into a
 ``Candle`` and upserts it into this table. Times are UTC Unix milliseconds so
 the database does not depend on the Raspberry Pi's local timezone.
 """
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS candles (
         CHECK (length(trim(exchange)) > 0 AND exchange = lower(exchange)),
     symbol TEXT NOT NULL
         CHECK (length(trim(symbol)) > 0 AND symbol = upper(symbol)),
-    -- interval_seconds=60 identifies the one-minute collector data.
+    -- Distinguishes minute, hourly, and other supported candle granularities.
     interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0),
     -- The candle's opening time, expressed as UTC Unix milliseconds.
     open_time_ms INTEGER NOT NULL CHECK (open_time_ms >= 0),

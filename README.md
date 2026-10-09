@@ -35,12 +35,15 @@ src/crypto_trader/
     main.py              Environment and application startup
     runner.py            Hourly strategy evaluation and scheduling
     data/                Yahoo, Coinbase, and trade-record data models
-        coinbase_candles.py Public one-minute candle collector
+        coinbase_candles.py Public live and historical candle collector
         coinbase_ticks.py  Continuous public trade/Level 2 collector
         rotating_writer.py Durable gzip-CSV rotation and book checkpoints
         upload.py          Independent rclone backup command
     notifications.py     Email formatting and delivery
     logging_config.py    Console and rotating-file logging
+    research/
+        data.py          Validated Coinbase hourly-data loader
+        backtest.py      Causal fee-aware target-weight backtester
     strategies/
         sma_distance.py  Reusable target-weight strategy
 notebooks/
@@ -92,14 +95,14 @@ The monitor reports and records risk status; it does not submit a hedge or
 close an order automatically. That action should be wired to the paper
 executor after the desired policy response is confirmed.
 
-## Coinbase minute candles
+## Coinbase candles
 
-The `crypto-candles` command stores completed one-minute candles for
+The `crypto-candles` command stores completed candles for
 `BTC-USD`, `ETH-USD`, `SOL-USD`, `XRP-USD`, and `DOGE-USD` in
 `data/database/trading.db`. It uses Coinbase Advanced Trade's public candle and
-server-time endpoints, so no API key is required. The first run backfills up to
-350 minutes per product; later runs resume from the latest stored candle.
-Coinbase occasionally omits individual historical minute buckets. The
+server-time endpoints, so no API key is required. One-minute collection remains
+the default for the live service. Later runs resume from the latest stored
+candle. Coinbase occasionally omits individual historical buckets. The
 collector warns about those source gaps and continues without manufacturing a
 zero-volume candle or a fake price.
 
@@ -115,23 +118,74 @@ Run continuously on the Raspberry Pi:
 crypto-candles
 ```
 
-To perform a one-time historical backfill, choose the products and number of
-days explicitly. This command fills the database and exits; it does not change
-the continuous service behavior:
+For the medium-horizon strategy, backfill five calendar years of hourly candles
+for BTC, ETH, SOL, and DOGE. The command retries temporary failures, paces API
+requests, reports page progress, and skips complete pages when resumed:
 
 ```bash
-crypto-candles --backfill-days 30 \
-  --products BTC-USD ETH-USD SOL-USD XRP-USD DOGE-USD
+crypto-candles --backfill-years 5 --granularity ONE_HOUR \
+  --products BTC-USD ETH-USD SOL-USD DOGE-USD
 ```
 
 The same operation can be run interactively in
 `notebooks/Coinbase_Candle_Backfill_And_Inspection.ipynb`, which also displays
 row counts, time coverage, recent candles, and the SQLite schema.
 
-Use `--database /path/to/trading.db` to choose another SQLite file or
-`--products BTC-USD ETH-USD` to collect a subset. `--symbols` remains an alias
-for `--products` during the transition. The collector stores only closed
-candles and is safe to restart; its unique key prevents duplicate rows.
+Use `--database /path/to/trading.db` to choose another SQLite file,
+`--products BTC-USD ETH-USD` to collect a subset, or `--backfill-days` for a
+shorter fixed window. `--symbols` remains an alias for `--products` during the
+transition. The collector stores only closed candles and is safe to restart;
+its unique key includes the interval and prevents duplicate rows. Hourly and
+minute candles can therefore coexist in the same database.
+
+## Reusable strategy research
+
+The research layer loads only Coinbase hourly candles and leaves missing source
+hours explicit. It accepts either the database path or an existing SQLite
+connection. The backtest engine shifts every target by one bar to prevent
+lookahead and requires an explicit maker/taker cost assumption.
+
+```python
+import pandas as pd
+
+from crypto_trader.research import TradingCosts, load_coinbase_hourly, run_backtest
+
+data = load_coinbase_hourly()
+closes = data.close_prices()
+
+# Replace this constant allocation with a strategy-generated target matrix.
+targets = pd.DataFrame(0.25, index=closes.index, columns=closes.columns)
+
+costs = TradingCosts(
+    maker_fee_rate=0.005,
+    taker_fee_rate=0.009,
+    maker_fraction=1.0,
+    slippage_rate=0.0002,
+)
+result = run_backtest(
+    closes,
+    targets,
+    costs=costs,
+    initial_equity=100_000,
+    rebalance_threshold=0.05,
+)
+result.summary()
+```
+
+Costs are charged on actual executed turnover relative to the portfolio's
+drifted weights. Reversing from a full long to a full short therefore creates
+two units of turnover. Here, `rebalance_threshold=0.05` skips a rebalance unless
+the sum of the required absolute weight changes exceeds 5%; this prevents tiny
+hourly adjustments from creating unrealistic fee drag. By default, the final
+open position is liquidated so net performance includes its exit cost. The
+engine reports gross returns, exchange fees, slippage, net returns, turnover,
+equity, drawdown, and an approximate round-trip count separately.
+
+For a notebook/development environment, install the optional tools with:
+
+```bash
+python -m pip install -e ".[research,dev]"
+```
 
 ## Database storage
 

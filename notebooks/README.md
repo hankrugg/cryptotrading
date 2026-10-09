@@ -2,6 +2,10 @@
 
 Notebooks are for explanation, charts, and final backtest presentation. Reusable data loading, strategy, risk, and metric logic belongs under `src/crypto_trader/` so notebook results can be reproduced and tested.
 
+New strategy notebooks should use `crypto_trader.research.load_coinbase_hourly`
+and `crypto_trader.research.run_backtest` instead of defining another data
+query or fee calculation inside the notebook.
+
 Suggested sequence:
 
 1. `01_data_quality.ipynb`
@@ -10,10 +14,11 @@ Suggested sequence:
 4. `04_risk_report.ipynb`
 
 `Coinbase_Candle_Backfill_And_Inspection.ipynb` is an operational notebook
-rather than a backtest. It runs a one-time Coinbase historical candle backfill
-and shows database coverage, recent rows, and the SQLite schema. Coinbase can
-omit individual historical buckets; the collector reports those source gaps
-but does not invent replacement candles.
+rather than a backtest. It downloads five years of Coinbase hourly candles for
+BTC, ETH, SOL, and DOGE, then shows database coverage, source gaps, recent rows,
+and the SQLite schema. Complete pages are skipped when the notebook is rerun.
+Coinbase can omit individual historical buckets; the collector reports those
+source gaps but does not invent replacement candles.
 
 `Coinbase_Tick_Data.ipynb` is a minimal public-WebSocket example. It captures
 individual `SOL-USD` market trades and Level 2 price-level updates for a few

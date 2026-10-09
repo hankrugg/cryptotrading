@@ -1,4 +1,4 @@
-"""Tests for Coinbase one-minute candle collection."""
+"""Tests for Coinbase live and historical candle collection."""
 
 from io import BytesIO
 import json
@@ -7,13 +7,16 @@ import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
+from urllib.error import URLError
 
 from crypto_trader.data.candles import Candle, create_candles_table
 from crypto_trader.data.coinbase_candles import (
     COINBASE_PRODUCTS,
     CoinbaseCandleError,
+    _calendar_years_ago_ms,
     backfill_historical_candles,
     collect_once,
+    fetch_completed_candles,
     fetch_coinbase_server_time_ms,
     fetch_completed_minute_candles,
     normalize_products,
@@ -68,6 +71,20 @@ class CoinbaseFetchTests(unittest.TestCase):
         request = mocked_urlopen.call_args.args[0]
         self.assertTrue(request.full_url.endswith("/api/v3/brokerage/time"))
 
+    @patch("crypto_trader.data.coinbase_candles.time.sleep")
+    @patch("crypto_trader.data.coinbase_candles.urlopen")
+    def test_retries_a_temporary_network_failure(
+        self, mocked_urlopen, mocked_sleep
+    ) -> None:
+        mocked_urlopen.side_effect = [
+            URLError("temporary failure"),
+            FakeResponse(json.dumps({"epochMillis": "1800000120000"}).encode()),
+        ]
+
+        self.assertEqual(fetch_coinbase_server_time_ms(), 1_800_000_120_000)
+        self.assertEqual(mocked_urlopen.call_count, 2)
+        mocked_sleep.assert_called_once_with(1.0)
+
     @patch("crypto_trader.data.coinbase_candles.urlopen")
     def test_fetches_only_requested_completed_candles(self, mocked_urlopen) -> None:
         now_ms = 1_800_000_120_000
@@ -104,6 +121,36 @@ class CoinbaseFetchTests(unittest.TestCase):
         self.assertIn("end=1800000060", request.full_url)
 
     @patch("crypto_trader.data.coinbase_candles.urlopen")
+    def test_fetches_completed_hourly_candles(self, mocked_urlopen) -> None:
+        hour_ms = 3_600_000
+        server_time_ms = 1_800_003_600_000
+        first_open_ms = 1_799_996_400_000
+        mocked_urlopen.return_value = FakeResponse(
+            json.dumps(
+                {
+                    "candles": [
+                        candle(first_open_ms),
+                        candle(first_open_ms + hour_ms),
+                    ]
+                }
+            ).encode()
+        )
+
+        candles = fetch_completed_candles(
+            "BTC-USD",
+            granularity="ONE_HOUR",
+            start_time_ms=first_open_ms,
+            end_time_ms=first_open_ms + hour_ms,
+            limit=2,
+            server_time_ms=server_time_ms,
+        )
+
+        self.assertEqual(len(candles), 2)
+        self.assertTrue(all(item.interval_seconds == 3_600 for item in candles))
+        request = mocked_urlopen.call_args.args[0]
+        self.assertIn("granularity=ONE_HOUR", request.full_url)
+
+    @patch("crypto_trader.data.coinbase_candles.urlopen")
     def test_api_error_response_is_reported(self, mocked_urlopen) -> None:
         mocked_urlopen.return_value = FakeResponse(
             json.dumps(
@@ -131,7 +178,7 @@ class CoinbaseCollectionTests(unittest.TestCase):
         self.connection.close()
 
     @patch("crypto_trader.data.coinbase_candles.fetch_coinbase_server_time_ms")
-    @patch("crypto_trader.data.coinbase_candles.fetch_completed_minute_candles")
+    @patch("crypto_trader.data.coinbase_candles.fetch_completed_candles")
     def test_collects_all_configured_products(
         self, mocked_fetch, mocked_server_time
     ) -> None:
@@ -179,7 +226,7 @@ class CoinbaseCollectionTests(unittest.TestCase):
         self.assertEqual(table, ("candles",))
 
     @patch("crypto_trader.data.coinbase_candles.fetch_coinbase_server_time_ms")
-    @patch("crypto_trader.data.coinbase_candles.fetch_completed_minute_candles")
+    @patch("crypto_trader.data.coinbase_candles.fetch_completed_candles")
     def test_historical_backfill_writes_requested_window(
         self, mocked_fetch, mocked_server_time
     ) -> None:
@@ -220,6 +267,7 @@ class CoinbaseCollectionTests(unittest.TestCase):
             products=("BTC-USD",),
             minutes=2,
             request_limit=10,
+            request_delay=0,
         )
 
         self.assertEqual(stored, 2)
@@ -229,8 +277,18 @@ class CoinbaseCollectionTests(unittest.TestCase):
         )
         self.assertEqual(mocked_fetch.call_count, 1)
 
+        stored_again = backfill_historical_candles(
+            self.connection,
+            products=("BTC-USD",),
+            minutes=2,
+            request_limit=10,
+            request_delay=0,
+        )
+        self.assertEqual(stored_again, 0)
+        self.assertEqual(mocked_fetch.call_count, 1)
+
     @patch("crypto_trader.data.coinbase_candles.fetch_coinbase_server_time_ms")
-    @patch("crypto_trader.data.coinbase_candles.fetch_completed_minute_candles")
+    @patch("crypto_trader.data.coinbase_candles.fetch_completed_candles")
     def test_historical_backfill_warns_and_keeps_source_gap(
         self, mocked_fetch, mocked_server_time
     ) -> None:
@@ -258,6 +316,7 @@ class CoinbaseCollectionTests(unittest.TestCase):
                 products=("BTC-USD",),
                 minutes=2,
                 request_limit=10,
+                request_delay=0,
             )
 
         self.assertEqual(stored, 1)
@@ -265,8 +324,19 @@ class CoinbaseCollectionTests(unittest.TestCase):
             self.connection.execute("SELECT count(*) FROM candles").fetchone()[0],
             1,
         )
-        self.assertIn("omitted 1 one-minute candle", "\n".join(logs.output))
+        self.assertIn("omitted 1 ONE_MINUTE candle", "\n".join(logs.output))
         self.assertIn("rather than inventing OHLCV data", "\n".join(logs.output))
+
+    def test_calendar_year_window_preserves_month_day_and_hour(self) -> None:
+        # 2026-10-09 19:00:00 UTC aligned to a one-hour candle.
+        last_complete_open_ms = 1_791_572_400_000
+        first_open_ms = _calendar_years_ago_ms(
+            last_complete_open_ms,
+            years=5,
+            interval_ms=3_600_000,
+        )
+
+        self.assertEqual(first_open_ms, 1_633_806_000_000)
 
 
 if __name__ == "__main__":

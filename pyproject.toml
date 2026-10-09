@@ -12,9 +12,24 @@ description = "Crypto strategy research and manual TradingView paper-trading inf
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2.2,<4",
     "python-dotenv>=1,<2",
     "websockets>=14,<17",
     "yfinance>=0.2.54,<2",
+]
+
+[project.optional-dependencies]
+# Research dependencies render notebook charts; development dependencies run
+# the same verification commands used before committing changes.
+research = [
+    "jupyterlab>=4,<5",
+    "matplotlib>=3.8,<4",
+]
+dev = [
+    "build>=1,<2",
+    "pytest>=8,<10",
+    "ruff>=0.9,<1",
 ]
 
 [project.scripts]
