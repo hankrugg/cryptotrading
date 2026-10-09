@@ -37,6 +37,7 @@ class TickUploadTests(unittest.TestCase):
             )
             self.assertEqual(command[1], "move")
             self.assertNotIn("--min-age", command)
+            self.assertIn("--delete-empty-src-dirs", command)
 
     def test_build_rclone_rejects_invalid_remote(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

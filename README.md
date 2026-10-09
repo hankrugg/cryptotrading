@@ -225,12 +225,14 @@ After the manual upload works, install the fifteen-minute systemd timer:
 systemctl list-timers coinbase-data-upload.timer
 ```
 
-The default uploader uses `rclone copy`, includes only completed gzip files and
-manifests, refuses to overwrite different remote objects, and never deletes
-local data. The optional `crypto-upload-ticks --move` mode removes local files
-only after rclone reports a successful transfer; do not enable it until remote
-uploads and restores have been verified. Monitor free space on the Pi while
-the non-destructive copy mode is active.
+The command-line uploader uses non-destructive `rclone copy` by default. The
+installed Pi timer deliberately runs it with `--move` to conserve limited SD
+card space. It includes only completed gzip files and manifests, refuses to
+overwrite a different remote object, and removes an eligible local file only
+after rclone successfully transfers and checks it. Active `.partial` files and
+files from failed uploads remain local for the next retry. Consequently, the
+Pi normally holds only the active hourly partitions and a small upload backlog,
+but free space should still be monitored in case Drive is unavailable.
 
 Useful service commands:
 

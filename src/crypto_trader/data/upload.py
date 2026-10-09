@@ -3,7 +3,8 @@
 The uploader is deliberately separate from the WebSocket collector.  A Google
 Drive outage can delay backups, but it cannot stop local market-data capture.
 Only finalized ``.csv.gz`` files and their manifests are eligible; active
-``.partial`` files are excluded.
+``.partial`` files are excluded.  Move mode removes each eligible local file
+only after rclone has successfully copied and checked it at the destination.
 """
 
 from __future__ import annotations
@@ -64,6 +65,12 @@ def build_rclone_command(
     ]
     if minimum_age_minutes:
         command.extend(["--min-age", f"{minimum_age_minutes}m"])
+    if move:
+        # The data files are removed by rclone only after successful transfer.
+        # Removing directories is safe because rclone can delete only folders
+        # that are actually empty; a directory containing an active .partial
+        # file remains in place.
+        command.append("--delete-empty-src-dirs")
     return command
 
 
@@ -130,8 +137,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--move",
         action="store_true",
         help=(
-            "delete local completed files after verified transfer; disabled by "
-            "default so the uploader is non-destructive"
+            "remove local completed files after rclone successfully transfers "
+            "and checks them; active and failed files remain local"
         ),
     )
     return parser

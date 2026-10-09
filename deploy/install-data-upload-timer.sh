@@ -2,8 +2,10 @@
 
 set -Eeuo pipefail
 
-# Install a separate timer that copies finalized data to an existing rclone
-# remote every fifteen minutes.  It does not delete local files by default.
+# Install a separate timer that moves finalized data to an existing rclone
+# remote every fifteen minutes.  Rclone deletes an eligible local file only
+# after successfully transferring and checking it at the destination.  Active
+# .partial files and files from failed transfers remain on the Pi.
 SERVICE_NAME="coinbase-data-upload"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
@@ -48,7 +50,7 @@ trap 'rm -f -- "${SERVICE_FILE}" "${TIMER_FILE}"' EXIT
 {
     printf '%s\n' \
         '[Unit]' \
-        'Description=Copy finalized Coinbase data to Google Drive' \
+        'Description=Upload finalized Coinbase data and reclaim local storage' \
         'Wants=network-online.target' \
         'After=network-online.target' \
         '' \
@@ -58,7 +60,7 @@ trap 'rm -f -- "${SERVICE_FILE}" "${TIMER_FILE}"' EXIT
         "Group=${SERVICE_GROUP}" \
         "WorkingDirectory=${PROJECT_DIR}" \
         "Environment=CRYPTO_TRADER_LOG_FILE=${PROJECT_DIR}/logs/coinbase-upload.log" \
-        "ExecStart=\"${VENV_PYTHON}\" -m crypto_trader.data.upload --remote ${REMOTE}" \
+        "ExecStart=\"${VENV_PYTHON}\" -m crypto_trader.data.upload --remote ${REMOTE} --move --minimum-age-minutes 2" \
         'Nice=10' \
         'IOSchedulingClass=idle' \
         'UMask=0077' \
@@ -88,4 +90,5 @@ sudo systemctl enable --now "${SERVICE_NAME}.timer"
 
 printf '\nUpload timer installed. Current schedule:\n'
 sudo systemctl --no-pager list-timers "${SERVICE_NAME}.timer"
+printf '\nFinalized local files will be removed only after a successful upload.\n'
 printf '\nRun an upload immediately with:\n  sudo systemctl start %s.service\n' "${SERVICE_NAME}"
